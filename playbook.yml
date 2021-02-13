@@ -3,7 +3,7 @@
   vars:
     - working_dir: "./"
     - webroot: "/var/www/{{ domain_name }}/public"
-    - remote_home_dir: "/home/ec2-user"
+    - remote_home_dir: "/home/{{ ansible_ssh_user }}"
 
   tasks:
     - name: Define RedHat.
