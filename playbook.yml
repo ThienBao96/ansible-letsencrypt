@@ -1,0 +1,97 @@
+- hosts: letsencrypt 
+  become: yes
+  vars:
+    - working_dir: "./"
+    - webroot: "/var/www/{{ domain_name }}/public"
+    - remote_home_dir: "/home/ec2-user"
+
+  tasks:
+    - name: Define RedHat.
+      set_fact:
+         package_name: "yum-utils"
+      when:
+         ansible_os_family == "RedHat"
+
+    - name: Define Ubuntu.
+      set_fact:
+         package_name: "yum-utils"
+      when:
+         ansible_os_family == "ubuntu"
+         
+    - name: Upgrade all packages
+      yum:
+        name: '*'
+        state: latest
+        update_cache: yes
+
+    - name: Install {{ package_name }}
+      yum: name={{ package_name }} state=latest
+
+    - name: Install epel
+      yum: name=https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm state=latest
+
+    - name: Install git
+      yum: name=git state=latest
+
+    - name: Install letsencrypt
+      yum: name=letsencrypt state=latest
+    
+    - name: Install nginx
+      yum: name=nginx state=latest
+
+    - name: Add the user 'www-data'
+      ansible.builtin.user:
+        name: www-data
+        comment: www-data
+
+    - name: Move nginx to nginx-previous
+      command: creates="/etc/nginx-previous" mv /etc/nginx /etc/nginx-previous
+
+    - name: Git checkout h5bp server-configs-nginx
+      ansible.builtin.git:
+        repo: 'https://github.com/h5bp/server-configs-nginx.git'
+        dest: "{{ remote_home_dir }}/server-configs-nginx"
+
+    - name: "create {{webroot}} directory"
+      ansible.builtin.file:
+        path: "{{webroot}}"
+        state: directory
+
+    - name: Copy server-configs-nginx to /etc/nginx
+      command: creates=/etc/nginx cp -r {{ remote_home_dir }}/server-configs-nginx /etc/nginx
+
+    - name: Remove default nginx config
+      file: name=/etc/nginx/conf.d/no-ssl.default.conf state=absent
+
+    - name: Create no-ssl site config
+      template:
+        src: "{{ working_dir }}/no-ssl.example.com.conf"
+        dest: /etc/nginx/conf.d/no-ssl.{{ domain_name }}.conf
+
+    - name: Reload nginx to activate no-ssl site
+      service: name=nginx state=restarted
+
+    - name: Create letsencrypt certificate
+      shell: letsencrypt certonly -n --webroot -w {{ webroot }} -m {{ letsencrypt_email }} --agree-tos -d {{ domain_name }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}
+
+    - name: Create ssl site config
+      template:
+        src: "{{ working_dir }}/example.com.conf"
+        dest: /etc/nginx/conf.d/{{ domain_name }}.conf
+
+    - name: Reload nginx to activate ssl site
+      service: name=nginx state=restarted
+
+    - name: Add letsencrypt cronjob for cert renewal
+      cron:
+        name: letsencrypt_renewal
+        special_time: weekly
+        job: letsencrypt --renew certonly -n --webroot -w {{ webroot }} -m {{ letsencrypt_email }} --agree-tos -d {{ domain_name }} && service nginx reload
+
+    - name: Deploy web file
+      ansible.builtin.copy:
+        src: "{{working_dir}}/build/"
+        dest: "{{webroot}}"
+        directory_mode: yes
